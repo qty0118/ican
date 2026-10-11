@@ -218,7 +218,8 @@ object Store {
                 .put("name", it.name).put("url", it.url).put("source", it.source)
                 .put("enrollStart", it.enrollStart).put("enrollEnd", it.enrollEnd)
                 .put("status", it.status).put("lastChecked", it.lastChecked)
-                .put("lastNote", it.lastNote).put("enabled", it.enabled))
+                .put("lastNote", it.lastNote).put("enabled", it.enabled)
+                .put("timeText", it.timeText))
         }
         val pArr = JSONArray()
         papers.forEach {
@@ -335,7 +336,7 @@ object Store {
                     o.optString("name"), o.optString("url"), o.optString("source"),
                     o.optString("enrollStart"), o.optString("enrollEnd"),
                     o.optString("status", "unknown"), o.optLong("lastChecked", 0L),
-                    o.optString("lastNote"), o.optBoolean("enabled", true)
+                    o.optString("lastNote"), o.optBoolean("enabled", true), o.optString("timeText")
                 ))
             }
         } catch (e: Exception) {}
@@ -349,7 +350,8 @@ object Store {
                 .put("name", it.name).put("url", it.url).put("source", it.source)
                 .put("enrollStart", it.enrollStart).put("enrollEnd", it.enrollEnd)
                 .put("status", it.status).put("lastChecked", it.lastChecked)
-                .put("lastNote", it.lastNote).put("enabled", it.enabled))
+                .put("lastNote", it.lastNote).put("enabled", it.enabled)
+                .put("timeText", it.timeText))
         }
         prefs.edit().putString("watched", wArr.toString()).apply()
     }
@@ -1573,6 +1575,7 @@ fun ProfileScreen(
     var editName by remember { mutableStateOf("") }
     var urlInput by remember { mutableStateOf("") }
     var nameInput by remember { mutableStateOf("") }
+    var timeInput by remember { mutableStateOf("") }
     var backupMsg by remember { mutableStateOf("") }
     var catQuery by remember { mutableStateOf("") }
     var watchQuery by remember { mutableStateOf("") }
@@ -1770,80 +1773,52 @@ fun ProfileScreen(
                     Column(modifier = Modifier.padding(vertical = 6.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(w.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
-                            AssistChip(onClick = { }, label = { Text(Monitor.statusText(w.status), style = MaterialTheme.typography.labelSmall) })
-                            Spacer(modifier = Modifier.width(8.dp))
                             Switch(checked = w.enabled, onCheckedChange = { on ->
                                 val i = watched.indexOfFirst { it.name == w.name }
                                 if (i >= 0) { watched[i] = watched[i].copy(enabled = on); onUpdate() }
                             })
                         }
-                        Text("报名：${w.enrollStart.ifBlank { "?" }} ~ ${w.enrollEnd.ifBlank { "?" }}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
-                        if (w.lastChecked > 0) Text("上次检查：${Monitor.fmtTime(w.lastChecked)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
-                        if (w.lastChecked > 0 && w.enabled) {
-                            val hrs = context.getSharedPreferences("baoyan_prefs", Context.MODE_PRIVATE).getInt("check_interval_hours", 12)
-                            Text("下次约：${Monitor.fmtTime(w.lastChecked + hrs * 3600000L)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
-                        }
-                        if (w.url.isNotBlank()) Text("来源：${w.url}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline, maxLines = 1)
-                        if (w.lastNote.isNotBlank()) Text(w.lastNote, style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            if (w.timeText.isNotBlank()) w.timeText else "时间未填写（点【编辑】填）",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = if (w.timeText.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                        )
+                        if (w.url.isNotBlank()) Text("通知页：${w.url}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline, maxLines = 1)
+                        if (w.timeText.isBlank() && w.lastNote.isNotBlank()) Text(w.lastNote, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
                         Row {
                             TextButton(onClick = {
-                                if (apiKey.isNotBlank()) {
-                                    checkMsg = "正在为「${w.name}」探测官网…"
-                                    scope.launch {
-                                        try {
-                                            val u = Monitor.discoverUrl(apiKey, w.name)
-                                            val idx = watched.indexOfFirst { it.name == w.name }
-                                            if (idx >= 0 && u.isNotBlank()) {
-                                                watched[idx] = watched[idx].copy(url = u, source = "AI 探测")
-                                                onUpdate()
-                                                checkMsg = "已找到官网：$u"
-                                            } else {
-                                                checkMsg = "未自动找到可验证的官网，请手动设置"
-                                            }
-                                        } catch (e: Exception) {
-                                            checkMsg = "探测失败：${e.message}"
-                                        }
-                                    }
-                                }
-                            }) { Text("找官网") }
-                            TextButton(onClick = {
-                                if (apiKey.isNotBlank() && checkingName != w.name) {
-                                    checkingName = w.name
-                                    checkMsg = "正在检查「${w.name}」…"
-                                    scope.launch {
-                                        try {
-                                            val o = Monitor.checkOne(context, apiKey, w)
-                                            val idx = watched.indexOfFirst { it.name == w.name }
-                                            if (idx >= 0) { watched[idx] = o.updated; onUpdate() }
-                                            o.alerts.forEachIndexed { i, p -> Monitor.notify(context, p.first, p.second, 3000 + i) }
-                                            checkMsg = "「${w.name}」${o.updated.lastNote.ifBlank { "检查完成" }}"
-                                        } catch (e: Exception) {
-                                            checkMsg = "「${w.name}」检查失败：${e.message}"
-                                        }
-                                        checkingName = ""
-                                    }
-                                }
-                            }) { Text(if (checkingName == w.name) "检查中…" else "检查") }
-                            TextButton(onClick = {
-                                if (w.url.isNotBlank()) {
-                                    try {
-                                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(w.url)))
-                                    } catch (e: Exception) { checkMsg = "无法打开：${e.message}" }
-                                } else checkMsg = "该竞赛还没有网址"
-                            }) { Text("打开") }
-                            TextButton(onClick = {
-                                editName = w.name; nameInput = w.name; urlInput = w.url; editDialog = true
+                                editName = w.name; nameInput = w.name; timeInput = w.timeText; urlInput = w.url; editDialog = true
                             }) { Text("编辑") }
+                            if (w.url.isNotBlank()) {
+                                TextButton(onClick = {
+                                    if (apiKey.isNotBlank() && checkingName != w.name) {
+                                        checkingName = w.name
+                                        checkMsg = "正在更新「${w.name}」…"
+                                        scope.launch {
+                                            try {
+                                                val o = Monitor.checkOne(context, apiKey, w)
+                                                val idx = watched.indexOfFirst { it.name == w.name }
+                                                if (idx >= 0) { watched[idx] = o.updated; onUpdate() }
+                                                o.alerts.forEachIndexed { i, p -> Monitor.notify(context, p.first, p.second, 3000 + i) }
+                                                checkMsg = "「${w.name}」${o.updated.lastNote.ifBlank { "已更新" }}"
+                                            } catch (e: Exception) {
+                                                checkMsg = "「${w.name}」更新失败：${e.message}"
+                                            }
+                                            checkingName = ""
+                                        }
+                                    }
+                                }) { Text(if (checkingName == w.name) "更新中…" else "更新") }
+                            }
                             TextButton(onClick = {
                                 watched.removeAll { it.name == w.name }
                                 onUpdate()
-                            }) { Text("移除") }
+                            }) { Text("删除") }
                         }
                         HorizontalDivider()
                     }
                 }
-                Text("💡 报名开始 / 临近截止会自动推送通知；数据来自所设网址。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
-                TextButton(onClick = { watched.clear(); onUpdate(); checkMsg = "已清空监控" }) { Text("清空监控") }
+                Text("💡 填【编辑】里的“时间”；若填了“通知页网址”，可点【更新】自动抓取时间。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                TextButton(onClick = { watched.clear(); onUpdate(); checkMsg = "已清空" }) { Text("清空") }
             }
         }
 
@@ -2111,15 +2086,15 @@ fun ProfileScreen(
         if (addDialog) {
             AlertDialog(
                 onDismissRequest = { addDialog = false },
-                title = { Text("添加竞赛监控") },
+                title = { Text("添加竞赛") },
                 text = {
                     Column(modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
-                        Text("推荐（点击即添加）", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
+                        Text("从内置目录添加（点击即加）：", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
                         PreloadedCompetitions.forEach { p ->
                             Row(
                                 modifier = Modifier.fillMaxWidth().clickable {
                                     if (watched.none { it.name == p.name }) {
-                                        watched.add(WatchedCompetition(name = p.name, url = p.url, source = p.category))
+                                        watched.add(WatchedCompetition(name = p.name))
                                         onUpdate()
                                     }
                                     addDialog = false
@@ -2128,7 +2103,6 @@ fun ProfileScreen(
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(p.name, style = MaterialTheme.typography.bodyMedium)
-                                    Text("${p.category} · ${p.url}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline, maxLines = 1)
                                 }
                                 Text("＋", color = MaterialTheme.colorScheme.primary)
                             }
@@ -2138,14 +2112,14 @@ fun ProfileScreen(
                         Text("手动添加", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
                         OutlinedTextField(value = nameInput, onValueChange = { nameInput = it }, label = { Text("竞赛名称") }, modifier = Modifier.fillMaxWidth())
                         Spacer(modifier = Modifier.height(4.dp))
-                        OutlinedTextField(value = urlInput, onValueChange = { urlInput = it }, label = { Text("官网 / 信息页网址") }, modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(value = timeInput, onValueChange = { timeInput = it }, label = { Text("时间（报名/举办，可空）") }, modifier = Modifier.fillMaxWidth())
                     }
                 },
                 confirmButton = {
                     TextButton(onClick = {
                         if (nameInput.isNotBlank()) {
-                            watched.add(WatchedCompetition(name = nameInput.trim(), url = urlInput.trim()))
-                            nameInput = ""; urlInput = ""
+                            watched.add(WatchedCompetition(name = nameInput.trim(), timeText = timeInput.trim()))
+                            nameInput = ""; timeInput = ""
                             onUpdate()
                         }
                         addDialog = false
@@ -2158,12 +2132,14 @@ fun ProfileScreen(
         if (editDialog) {
             AlertDialog(
                 onDismissRequest = { editDialog = false },
-                title = { Text("编辑监控项") },
+                title = { Text("编辑竞赛") },
                 text = {
                     Column {
                         OutlinedTextField(value = nameInput, onValueChange = { nameInput = it }, label = { Text("竞赛名称") }, modifier = Modifier.fillMaxWidth())
                         Spacer(modifier = Modifier.height(6.dp))
-                        OutlinedTextField(value = urlInput, onValueChange = { urlInput = it }, label = { Text("官网 / 信息页网址") }, modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(value = timeInput, onValueChange = { timeInput = it }, label = { Text("时间（报名/举办，如 2026年3月1-31日报名）") }, modifier = Modifier.fillMaxWidth())
+                        Spacer(modifier = Modifier.height(6.dp))
+                        OutlinedTextField(value = urlInput, onValueChange = { urlInput = it }, label = { Text("通知页网址（可选，用于自动更新时间）") }, modifier = Modifier.fillMaxWidth())
                     }
                 },
                 confirmButton = {
@@ -2172,8 +2148,8 @@ fun ProfileScreen(
                         if (idx >= 0) {
                             watched[idx] = watched[idx].copy(
                                 name = nameInput.trim().ifBlank { editName },
-                                url = urlInput.trim(),
-                                source = "手动设置"
+                                timeText = timeInput.trim(),
+                                url = urlInput.trim()
                             )
                             onUpdate()
                         }

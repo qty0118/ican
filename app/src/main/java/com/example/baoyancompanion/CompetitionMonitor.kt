@@ -45,7 +45,8 @@ data class WatchedCompetition(
     val status: String = "unknown",
     val lastChecked: Long = 0L,
     val lastNote: String = "",
-    val enabled: Boolean = true
+    val enabled: Boolean = true,
+    val timeText: String = ""   // 竞赛的报名/举办时间（自由文本）
 )
 
 // ==================== 预置竞赛信息渠道（已联网验证可达，2026-10-11） ====================
@@ -236,67 +237,43 @@ object Monitor {
         else tokens.any { t.contains(it) }
     }
 
-    // ---------- 单条检查 ----------
+    // ---------- 单条检查（提取时间）----------
 
     suspend fun checkOne(ctx: Context, apiKey: String, w: WatchedCompetition): CheckOutcome {
         val now = System.currentTimeMillis()
         if (w.url.isBlank()) {
-            return CheckOutcome(w.copy(lastChecked = now, lastNote = "未设置监控网址"), emptyList())
+            return CheckOutcome(w.copy(lastChecked = now, lastNote = "未设置通知页网址"), emptyList())
         }
         val html = httpGet(w.url)
-            ?: return CheckOutcome(w.copy(lastChecked = now, lastNote = "抓取失败（网络或站点不可达）"), emptyList())
+            ?: return CheckOutcome(w.copy(lastChecked = now, lastNote = "抓取失败（网络或网站不可达）"), emptyList())
         val text = htmlToText(html)
         val alerts = mutableListOf<Pair<String, String>>()
 
-        val judged = judgeEnroll(apiKey, w.name, text)
+        val judged = judgeTime(apiKey, w.name, text)
         var updated = w.copy(lastChecked = now)
         if (judged != null) {
-            val enrolling = judged.optString("enrolling")
-            val start = normDate(judged.optString("enrollStart"))
-            val end = normDate(judged.optString("enrollEnd"))
-            val note = judged.optString("note")
-            val oldStatus = w.status
-            val newStatus = when (enrolling) {
-                "yes" -> "enrolling"
-                "no" -> "closed"
-                else -> w.status
-            }
+            val t = judged.optString("time").trim()
+            val note = judged.optString("note").trim()
+            val oldTime = w.timeText
+            val newTime = if (t.isNotBlank() && !t.equals("null", true)) t else w.timeText
             updated = updated.copy(
-                enrollStart = if (start.isNotBlank()) start else w.enrollStart,
-                enrollEnd = if (end.isNotBlank()) end else w.enrollEnd,
-                status = newStatus,
-                lastNote = note.ifBlank { "已检查" }
+                timeText = newTime,
+                lastNote = if (newTime.isBlank()) "页面里没找到时间，建议换成该竞赛的通知/公告页" else note
             )
-            if (newStatus == "enrolling" && oldStatus != "enrolling") {
-                alerts.add(
-                    "🔔 ${w.name} 开始报名" to
-                            "报名已开放${if (updated.enrollEnd.isNotBlank()) "，截止 ${updated.enrollEnd}" else ""}。$note\n数据来源：${w.url}"
-                )
-            }
-            if (updated.enrollEnd.isNotBlank()) {
-                val d = daysUntil(updated.enrollEnd)
-                if (d in 0..3) {
-                    alerts.add(
-                        "⏰ ${w.name} 报名将截止" to
-                                "距报名截止还有 $d 天（${updated.enrollEnd}）。$note\n数据来源：${w.url}"
-                    )
-                }
+            if (newTime.isNotBlank() && newTime != oldTime) {
+                alerts.add("🔔 ${w.name} 时间有更新" to "$newTime\n数据来源：${w.url}")
             }
         } else {
-            val rel = looksRelevant(w.name, text)
-            updated = updated.copy(
-                lastNote = if (!rel) "该网址疑似平台首页/无关页，建议【编辑】换成该竞赛的具体报名页"
-                else keywordHint(text)
-            )
+            updated = updated.copy(lastNote = "未能解析页面，建议换成该竞赛的通知/公告页")
         }
         return CheckOutcome(updated, alerts)
     }
 
-    private suspend fun judgeEnroll(apiKey: String, name: String, pageText: String): JSONObject? {
-        val sys = "你是竞赛信息解析助手。只输出一个 JSON 对象，不要任何多余文字。"
-        val user = "竞赛名称：$name\n\n以下是其官方页面正文（可能不完整）：\n${pageText.take(6000)}\n\n" +
-                "请判断并只输出 JSON：{\"enrolling\":\"yes|no|unknown\",\"enrollStart\":\"YYYY-MM-DD|null\"," +
-                "\"enrollEnd\":\"YYYY-MM-DD|null\",\"note\":\"一句话说明\"}"
+    private suspend fun judgeTime(apiKey: String, name: String, pageText: String): JSONObject? {
+        val sys = "你是竞赛信息解析助手。只输出一个 JSON 对象，不要多余解释。"
+        val user = "竞赛名称：$name\n\n页面正文（可能不完整）：\n${pageText.take(6000)}\n\n" +
+                "请从页面中找出该竞赛的【时间信息】（报名时间或比赛/举办时间），原样摘录日期与时间，不要臆造。" +
+                "只输出 JSON：{\"time\":\"如 2026年3月1日-31日报名；9月比赛；找不到就填空字符串\",\"note\":\"一句话\"}"
         val raw = deepSeekRaw(apiKey, sys, user, 800)
         return try {
             val a = raw.indexOf('{'); val b = raw.lastIndexOf('}')
@@ -321,11 +298,6 @@ object Monitor {
     }
 
     // ---------- 工具 ----------
-
-    private fun keywordHint(text: String): String {
-        if (text.contains("报名")) return "页面出现“报名”字样（未解析出具体时间，建议换更具体的报名页）"
-        return "已检查，未发现报名信息（可能不是报名页，建议换官网报名页）"
-    }
 
     fun normDate(s: String): String {
         if (s.isBlank() || s.equals("null", true)) return ""
